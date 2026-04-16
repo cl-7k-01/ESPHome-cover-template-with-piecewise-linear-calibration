@@ -279,3 +279,12 @@ cover:
           id(cover1).position = id(c1_pos);
           id(cover1).current_operation = cover::COVER_OPERATION_IDLE;
           id(cover1).publish_state();
+
+
+# License: GNU GPL v3
+# This project is licensed under the GNU GPL v3.
+# You are free to copy, modify, and distribute this code, provided that any derivative work remains open-source
+# and is released under the same license. For further details, please refer to the LICENSE file included
+# in this repository.
+
+# Author: [cl-7k-01]
