@@ -123,6 +123,13 @@ When you request a position, the script:
 
 On stop, it calculates the intermediate position based on elapsed time.
 
+**WARNING / DISCLAIMER**
+Use this code at your own risk. Controlling AC motors involves high voltage and mechanical risks.
+The author is not responsible for any damage to your hardware or property.
+This software is provided "as is", without warranty of any kind, express or implied.
+In no event shall the author be held liable for any damages, including but not limited to property damage, personal injury, or hardware failure arising from the use of this configuration. Controlling high-voltage loads involves significant risks of electric shock and fire.
+Always verify that both hardware and software interlocks are correctly configured before operation. Use this code at your own risk
+
 ## License
 License: GNU GPL v3
 This project is licensed under the GNU GPL v3.
