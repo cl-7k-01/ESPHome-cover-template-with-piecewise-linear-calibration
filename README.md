@@ -124,8 +124,11 @@ When you request a position, the script:
 On stop, it calculates the intermediate position based on elapsed time.
 
 ## License
-
-GPL v3
+License: GNU GPL v3
+This project is licensed under the GNU GPL v3.
+You are free to copy, modify, and distribute this code, provided that any derivative work remains open-source
+and is released under the same license. For further details, please refer to the LICENSE file included
+in this repository.
 
 ## Contributing
 
