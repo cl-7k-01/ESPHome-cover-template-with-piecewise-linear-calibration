@@ -1,0 +1,281 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# ESPHome Cover with Piecewise Linear Calibration
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Precise position control for roller shutters/blinds, compensating for the
+# non-linear behavior caused by varying drum diameter as the shutter wraps.
+#
+# Instead of assuming constant speed (like time_based cover), this uses
+# 4-point piecewise linear interpolation (0%, 25%, 50%, 75%, 100%) to map
+# physical position to actual travel time.
+#
+# Calibration values are exposed as HA number entities — tune without reflashing.
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+# HOW TO CALIBRATE:
+#   1. Fully close the cover
+#   2. Start a stopwatch, press open
+#   3. Note the seconds when the cover physically reaches 25%, 50%, 75%
+#   4. Enter those values in the HA number entities
+#   5. Repeat for closing direction if speeds differ
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# HARDWARE REQUIREMENTS:
+# You must define two switches for your relay/motor control:
+#   - id: relay_open   → relay that opens the cover
+#   - id: relay_close  → relay that closes the cover
+# These are hardware-specific and NOT included in this template.
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+
+esphome:
+  name: your-device-name          # <-- CUSTOMIZE
+  friendly_name: Your Device Name # <-- CUSTOMIZE
+  on_boot:
+    priority: -100  # Run after all components are initialized
+    then:
+      - lambda: |-
+          // Restore cover position from flash and publish state to HA
+          id(cover1).position = id(c1_pos);
+          id(cover1).current_operation = cover::COVER_OPERATION_IDLE;
+          id(cover1).publish_state();
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GLOBALS
+# ─────────────────────────────────────────────────────────────────────────────
+# c1_pos       → current position (0.0 = closed, 1.0 = open), saved to flash
+# c1_target    → requested target position
+# c1_dir       → direction: +1 opening, -1 closing
+# c1_move_ms   → calculated movement duration in milliseconds
+# c1_start_pos → position when movement started (for intermediate stop calc)
+# c1_start_ms  → millis() timestamp when movement started
+# ─────────────────────────────────────────────────────────────────────────────
+globals:
+  - { id: c1_pos,       type: float, restore_value: true,  initial_value: '0.0' }
+  - { id: c1_target,    type: float, restore_value: false, initial_value: '0.0' }
+  - { id: c1_dir,       type: int,   restore_value: false, initial_value: '0'   }
+  - { id: c1_move_ms,   type: float, restore_value: false, initial_value: '0'   }
+  - { id: c1_start_pos, type: float, restore_value: false, initial_value: '0.0' }
+  - { id: c1_start_ms,  type: float, restore_value: false, initial_value: '0'   }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NUMBER — Calibration parameters editable from Home Assistant
+# ─────────────────────────────────────────────────────────────────────────────
+# Initial values are LINEAR (as if time_based). After measuring real times
+# at 25/50/75%, update them from HA without reflashing.
+# ─────────────────────────────────────────────────────────────────────────────
+number:
+  - platform: template
+    name: "Cover1 Open Total (s)"
+    id: c1_open_total
+    min_value: 1
+    max_value: 60
+    step: 0.5
+    optimistic: true
+    restore_value: true
+    initial_value: 20.0           # <-- CUSTOMIZE: your total open time in seconds
+    entity_category: config
+    icon: "mdi:timer"
+
+  - platform: template
+    name: "Cover1 Close Total (s)"
+    id: c1_close_total
+    min_value: 1
+    max_value: 60
+    step: 0.5
+    optimistic: true
+    restore_value: true
+    initial_value: 20.0           # <-- CUSTOMIZE: your total close time in seconds
+    entity_category: config
+    icon: "mdi:timer"
+
+  - platform: template
+    name: "Cover1 Open @25% (s)"
+    id: c1_open_25
+    min_value: 0
+    max_value: 60
+    step: 0.5
+    optimistic: true
+    restore_value: true
+    initial_value: 5.0            # Linear default: total * 0.25
+    entity_category: config
+
+  - platform: template
+    name: "Cover1 Open @50% (s)"
+    id: c1_open_50
+    min_value: 0
+    max_value: 60
+    step: 0.5
+    optimistic: true
+    restore_value: true
+    initial_value: 10.0           # Linear default: total * 0.50
+    entity_category: config
+
+  - platform: template
+    name: "Cover1 Open @75% (s)"
+    id: c1_open_75
+    min_value: 0
+    max_value: 60
+    step: 0.5
+    optimistic: true
+    restore_value: true
+    initial_value: 15.0           # Linear default: total * 0.75
+    entity_category: config
+
+  - platform: template
+    name: "Cover1 Close @25% (s)"
+    id: c1_close_25
+    min_value: 0
+    max_value: 60
+    step: 0.5
+    optimistic: true
+    restore_value: true
+    initial_value: 5.0            # Linear default: total * 0.25
+    entity_category: config
+
+  - platform: template
+    name: "Cover1 Close @50% (s)"
+    id: c1_close_50
+    min_value: 0
+    max_value: 60
+    step: 0.5
+    optimistic: true
+    restore_value: true
+    initial_value: 10.0           # Linear default: total * 0.50
+    entity_category: config
+
+  - platform: template
+    name: "Cover1 Close @75% (s)"
+    id: c1_close_75
+    min_value: 0
+    max_value: 60
+    step: 0.5
+    optimistic: true
+    restore_value: true
+    initial_value: 15.0           # Linear default: total * 0.75
+    entity_category: config
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SCRIPT — Movement controller with piecewise linear correction
+# ─────────────────────────────────────────────────────────────────────────────
+# p2t() converts physical position (0-1) to time fraction (0-1) using
+# linear interpolation across 4 segments: 0→25%, 25→50%, 50→75%, 75→100%
+# ─────────────────────────────────────────────────────────────────────────────
+script:
+  - id: sc1
+    mode: restart
+    then:
+      - lambda: |-
+          float cur = id(c1_pos);
+          float tgt = id(c1_target);
+          float total_s, s25, s50, s75;
+
+          // Select calibration values based on direction
+          if (tgt >= cur) {
+            id(c1_dir) = 1;
+            total_s = id(c1_open_total).state;
+            s25 = id(c1_open_25).state;
+            s50 = id(c1_open_50).state;
+            s75 = id(c1_open_75).state;
+          } else {
+            id(c1_dir) = -1;
+            total_s = id(c1_close_total).state;
+            s25 = id(c1_close_25).state;
+            s50 = id(c1_close_50).state;
+            s75 = id(c1_close_75).state;
+          }
+
+          // Convert calibration points to time fractions
+          float t25 = s25 / total_s;
+          float t50 = s50 / total_s;
+          float t75 = s75 / total_s;
+
+          // p2t: position-to-time piecewise linear interpolation
+          auto p2t = [&](float p) -> float {
+            if      (p <= 0.0f)  return 0.0f;
+            else if (p <= 0.25f) return (p / 0.25f) * t25;
+            else if (p <= 0.50f) return t25 + ((p - 0.25f) / 0.25f) * (t50 - t25);
+            else if (p <= 0.75f) return t50 + ((p - 0.50f) / 0.25f) * (t75 - t50);
+            else if (p <  1.0f)  return t75 + ((p - 0.75f) / 0.25f) * (1.0f - t75);
+            else                 return 1.0f;
+          };
+
+          // Calculate movement duration
+          id(c1_move_ms)   = std::abs(p2t(tgt) - p2t(cur)) * total_s * 1000.0f;
+          id(c1_start_pos) = cur;
+          id(c1_start_ms)  = (float)millis();
+
+      # Activate relay with interlock delay
+      - if:
+          condition:
+            lambda: return id(c1_dir) == 1;
+          then:
+            - switch.turn_off: relay_close
+            - delay: 125ms
+            - switch.turn_on: relay_open
+          else:
+            - switch.turn_off: relay_open
+            - delay: 125ms
+            - switch.turn_on: relay_close
+
+      # Update cover state
+      - lambda: |-
+          id(cover1).current_operation = id(c1_dir) == 1
+            ? cover::COVER_OPERATION_OPENING
+            : cover::COVER_OPERATION_CLOSING;
+          id(cover1).publish_state();
+
+      # Wait for calculated duration
+      - delay: !lambda return (uint32_t) id(c1_move_ms);
+
+      # Movement complete — turn off relays and update position
+      - switch.turn_off: relay_open
+      - switch.turn_off: relay_close
+      - lambda: |-
+          id(c1_pos) = id(c1_target);
+          id(cover1).position = id(c1_pos);
+          id(cover1).current_operation = cover::COVER_OPERATION_IDLE;
+          id(cover1).publish_state();
+
+# ─────────────────────────────────────────────────────────────────────────────
+# COVER — Template cover with integrated non-linear correction
+# ─────────────────────────────────────────────────────────────────────────────
+cover:
+  - platform: template
+    name: "Cover 1"               # <-- CUSTOMIZE: your cover name
+    id: cover1
+    device_class: shutter
+    has_position: true
+    optimistic: false
+
+    open_action:
+      - globals.set: { id: c1_target, value: '1.0' }
+      - script.execute: sc1
+
+    close_action:
+      - globals.set: { id: c1_target, value: '0.0' }
+      - script.execute: sc1
+
+    position_action:
+      - globals.set:
+          id: c1_target
+          value: !lambda return pos;
+      - script.execute: sc1
+
+    stop_action:
+      - script.stop: sc1
+      - switch.turn_off: relay_open
+      - switch.turn_off: relay_close
+      - lambda: |-
+          // Calculate intermediate position based on elapsed time
+          float elapsed = std::max(0.0f, (float)millis() - id(c1_start_ms) - 125.0f);
+          float frac = id(c1_move_ms) > 0
+            ? std::min(1.0f, elapsed / id(c1_move_ms))
+            : 0.0f;
+          id(c1_pos) = std::clamp(
+            id(c1_start_pos) + frac * (id(c1_target) - id(c1_start_pos)),
+            0.0f, 1.0f
+          );
+          id(cover1).position = id(c1_pos);
+          id(cover1).current_operation = cover::COVER_OPERATION_IDLE;
+          id(cover1).publish_state();
