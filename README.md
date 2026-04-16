@@ -125,7 +125,7 @@ On stop, it calculates the intermediate position based on elapsed time.
 
 ## License
 
-MIT — do whatever you want with it.
+GPL v3
 
 ## Contributing
 
